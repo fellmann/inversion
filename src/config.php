@@ -21,5 +21,5 @@ return [
     // Mindestabstand zwischen Prüfungen auf neuen Modelllauf (Sekunden)
     'check_interval' => 600,
     'parallel' => 12,
-    'keep_runs' => 2,
+    'keep_runs' => 1,
 ];

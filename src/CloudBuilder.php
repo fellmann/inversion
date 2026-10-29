@@ -261,12 +261,12 @@ class CloudBuilder
         ];
         file_put_contents("$final.tmp", json_encode($out));
         rename("$final.tmp", $final);
-        $this->cleanup($run);
+        $this->cleanup();
         $this->status('idle', $run, $total, $total, 'fertig');
         return $final;
     }
 
-    private function cleanup(string $current): void
+    private function cleanup(): void
     {
         $runs = [];
         foreach (glob("{$this->dir}/clouds_*.json") as $f) {
@@ -276,11 +276,11 @@ class CloudBuilder
         foreach (array_slice($runs, $this->cfg['keep_runs']) as $r) {
             @unlink("{$this->dir}/clouds_$r.json");
         }
+        array_map('unlink', glob("{$this->dir}/*.tmp") ?: []);
         foreach (glob("{$this->dir}/run_*", GLOB_ONLYDIR) as $d) {
-            if (basename($d) !== "run_$current") {
-                array_map('unlink', glob("$d/*"));
-                @rmdir($d);
-            }
+            // Zwischendateien (auch des gerade fertigen Laufs) werden nicht mehr gebraucht
+            array_map('unlink', glob("$d/*"));
+            @rmdir($d);
         }
     }
 }
