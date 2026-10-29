@@ -1,0 +1,17 @@
+services:
+  web:
+    image: php:apache
+    ports:
+      - "8080:80"
+    volumes:
+      # Webroot = public/; src/, bin/ und cache/ liegen daneben (relative Pfade ../src usw.)
+      - ./public:/var/www/html:ro
+      - ./src:/var/www/src:ro
+      - ./bin:/var/www/bin:ro
+      - cache:/var/www/cache
+    # Cache-Volume für den Apache-Nutzer beschreibbar machen, dann normal starten
+    command: sh -c "chown www-data:www-data /var/www/cache && exec apache2-foreground"
+    restart: unless-stopped
+
+volumes:
+  cache:
