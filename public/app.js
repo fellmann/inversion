@@ -273,19 +273,33 @@ const markerDefs = [
   { name: 'Weberstr. 36, Merzhausen', lat: 47.96114, lon: 7.82483 },
   { name: 'Schauinsland', lat: 47.91188, lon: 7.89866 },
   { name: 'Schönberg', lat: 47.95471, lon: 7.80550 },
+  // Täler: nur dezente Beschriftung, ohne Stange
+  { name: 'Dreisamtal', lat: 47.97414, lon: 7.94035, valley: true },
+  { name: 'Hexental', lat: 47.92392, lon: 7.78028, valley: true },
+  { name: 'Glottertal', lat: 48.04853, lon: 7.95440, valley: true },
+  // Höllental: Talmündung bei Himmelreich liegt knapp außerhalb des Gebiets, daher der stadtnahe Teil
+  { name: 'Höllental', lat: 47.9595, lon: 7.9820, valley: true },
+  { name: 'Günterstal', lat: 47.96460, lon: 7.85550, valley: true },
+  { name: 'Kappler Tal', lat: 47.97030, lon: 7.91224, valley: true },
+  { name: 'Freiburger Bucht', lat: 48.01364, lon: 7.75433, valley: true },
 ];
 const poleMat = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
 const markers = markerDefs.map(m => {
   const x = (m.lon - clouds.center.lon) * M_LON, y = (m.lat - clouds.center.lat) * M_LAT;
   const h = terrainAt(x, y);
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  if (m.valley) {
+    el.className = 'label valley';
+    el.textContent = m.name;
+    return { el, pos: new THREE.Vector3(x, h + 150, -y) };
+  }
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(25, 25, 1, 8), poleMat);
   pole.scale.y = 1000;
   pole.position.set(x, h + 500, -y);
   world.add(pole);
-  const el = document.createElement('div');
   el.className = 'label';
   el.textContent = `${m.name} · ${Math.round(h)} m`;
-  document.body.appendChild(el);
   return { el, pos: new THREE.Vector3(x, h + 1000, -y) };
 });
 const tmp = new THREE.Vector3();
@@ -309,3 +323,43 @@ renderer.setAnimationLoop(() => {
   }
   renderer.render(scene, camera);
 });
+
+// ---------------------------------------------------------------- Update-Status
+// Der Server liefert zunächst den alten Lauf und lädt einen neuen im Hintergrund; das zeigen wir an.
+const upd = $('update');
+const shownRun = clouds.run.replace(/[-:TZ]/g, '').slice(0, 10); // YYYYMMDDHH
+// ?simulate=update: spielt den Ablauf "Update läuft -> neuer Lauf verfügbar" ohne Server nach (ca. 15 s)
+const simStart = new URLSearchParams(location.search).get('simulate') === 'update' ? Date.now() : null;
+async function fetchStatus() {
+  if (simStart === null) return (await fetch('api/status.php', { cache: 'no-store' })).json();
+  const p = Math.min(1, (Date.now() - simStart) / 15000);
+  return p < 1 ? { state: 'running', run: 'sim', done: Math.round(p * 1400), total: 1400 } : { state: 'idle', run: 'sim' };
+}
+async function pollStatus() {
+  let delay = 60000;
+  try {
+    const st = await fetchStatus();
+    if (st.state === 'running') {
+      delay = simStart === null ? 3000 : 500;
+      upd.hidden = false;
+      upd.replaceChildren(`Neuer Modelllauf wird geladen … ${st.done} / ${st.total}`);
+      const bar = document.createElement('progress');
+      bar.max = st.total || 1; bar.value = st.done || 0;
+      upd.append(bar);
+    } else if (st.state === 'error') {
+      upd.hidden = false;
+      upd.textContent = 'Aktualisierung fehlgeschlagen: ' + st.message;
+    } else if (st.run && st.run !== shownRun) {
+      upd.hidden = false;
+      const btn = document.createElement('button');
+      btn.textContent = 'Neu laden';
+      btn.onclick = () => location.reload();
+      upd.replaceChildren('Neuer Modelllauf verfügbar ', btn);
+      return; // fertig, kein weiteres Polling nötig
+    } else {
+      upd.hidden = true;
+    }
+  } catch (e) { /* Netzfehler: später erneut */ }
+  setTimeout(pollStatus, delay);
+}
+pollStatus();

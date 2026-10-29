@@ -25,3 +25,7 @@ das Frontend zeigt den Fortschritt. Ein Cron-Job ist nicht nötig: Nur beim Aufr
     docker compose up
 
 Läuft auf dem offiziellen `php:8-cli`-Image (Projektordner als Volume, Cache in `./cache`). Dann http://localhost:8080 öffnen.
+
+## Test-Parameter (URL)
+- `?simulate=update` – spielt die Anzeige „neuer Modelllauf wird geladen → verfügbar" nach (ca. 15 s), ohne Server-Update
+- `?t=<n>` – Startzeitschritt, `?sub=<1..6>` – horizontale Feinunterteilung der Wolken
