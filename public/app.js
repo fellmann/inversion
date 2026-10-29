@@ -268,6 +268,15 @@ function terrainAt(x, y) {
   const i = Math.floor(fx), j = Math.floor(fy), ax = fx - i, ay = fy - j, h = (jj, ii) => heights[jj * nx + ii];
   return h(j, i) * (1 - ax) * (1 - ay) + h(j, i + 1) * ax * (1 - ay) + h(j + 1, i) * (1 - ax) * ay + h(j + 1, i + 1) * ax * ay;
 }
+// Talachse aus dem Gelände: Richtung der geringsten Krümmung (Eigenvektor der Hesse-Matrix, geglättet).
+// Winkel in Grad gegen Ost, gegen den Uhrzeigersinn (Norden = 90).
+function valleyAngle(x, y, d = 600) {
+  const S = (px, py) => { let a = 0; for (const i of [-1, 0, 1]) for (const j of [-1, 0, 1]) a += terrainAt(px + i * d / 2, py + j * d / 2); return a / 9; };
+  const h0 = S(x, y);
+  const hxx = S(x + d, y) - 2 * h0 + S(x - d, y), hyy = S(x, y + d) - 2 * h0 + S(x, y - d);
+  const hxy = (S(x + d, y + d) - S(x + d, y - d) - S(x - d, y + d) + S(x - d, y - d)) / 4;
+  return (0.5 * Math.atan2(2 * hxy, hxx - hyy) * 180 / Math.PI + 90 + 180) % 180; // senkrecht zur stärksten Krümmung
+}
 const markerDefs = [
   { name: 'Freiburg (Münster)', lat: clouds.center.lat, lon: clouds.center.lon },
   { name: 'Weberstr. 36, Merzhausen', lat: 47.96114, lon: 7.82483 },
@@ -279,9 +288,12 @@ const markerDefs = [
   { name: 'Glottertal', lat: 48.04853, lon: 7.95440, valley: true },
   // Höllental: Talmündung bei Himmelreich liegt knapp außerhalb des Gebiets, daher der stadtnahe Teil
   { name: 'Höllental', lat: 47.9595, lon: 7.9820, valley: true },
-  { name: 'Günterstal', lat: 47.96460, lon: 7.85550, valley: true },
+  { name: 'Günterstal', lat: 47.95830, lon: 7.86620, valley: true },
+  // Katzental: Lage laut Google Maps zwischen Au und Horben, Position hier geschätzt (Mitte zwischen beiden Orten)
+  { name: 'Katzental', lat: 47.94450, lon: 7.84000, valley: true },
   { name: 'Kappler Tal', lat: 47.97030, lon: 7.91224, valley: true },
-  { name: 'Freiburger Bucht', lat: 48.01364, lon: 7.75433, valley: true },
+  // Freiburger Bucht: flache Ebene, Krümmung unbrauchbar -> fester Winkel entlang des Schwarzwaldrands
+  { name: 'Freiburger Bucht', lat: 48.01364, lon: 7.75433, valley: true, angle: 70 },
 ];
 const poleMat = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
 const markers = markerDefs.map(m => {
@@ -292,7 +304,8 @@ const markers = markerDefs.map(m => {
   if (m.valley) {
     el.className = 'label valley';
     el.textContent = m.name;
-    return { el, pos: new THREE.Vector3(x, h + 150, -y) };
+    const a = (m.angle ?? valleyAngle(x, y)) * Math.PI / 180;
+    return { el, pos: new THREE.Vector3(x, h + 150, -y), dir: new THREE.Vector3(Math.cos(a), 0, -Math.sin(a)) };
   }
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(25, 25, 1, 8), poleMat);
   pole.scale.y = 1000;
@@ -302,7 +315,7 @@ const markers = markerDefs.map(m => {
   el.textContent = `${m.name} · ${Math.round(h)} m`;
   return { el, pos: new THREE.Vector3(x, h + 1000, -y) };
 });
-const tmp = new THREE.Vector3();
+const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
 
 function resize() {
   const w = innerWidth, h = innerHeight;
@@ -320,6 +333,12 @@ renderer.setAnimationLoop(() => {
     m.el.style.display = tmp.z < 1 ? '' : 'none';
     m.el.style.left = (tmp.x * 0.5 + 0.5) * innerWidth + 'px';
     m.el.style.top = (-tmp.y * 0.5 + 0.5) * innerHeight + 'px';
+    if (m.dir) { // Talnamen entlang des Talverlaufs drehen (Bildschirmwinkel der Talachse), immer lesbar
+      tmp2.copy(m.pos).addScaledVector(m.dir, 500).applyMatrix4(world.matrixWorld).project(camera);
+      let deg = Math.atan2(-(tmp2.y - tmp.y) * innerHeight, (tmp2.x - tmp.x) * innerWidth) * 180 / Math.PI;
+      if (deg > 90) deg -= 180; else if (deg < -90) deg += 180;
+      m.el.style.transform = `translate(-50%, -50%) rotate(${deg.toFixed(1)}deg)`;
+    }
   }
   renderer.render(scene, camera);
 });
