@@ -289,7 +289,7 @@ const markerDefs = [
   { name: 'Schönberg', lat: 47.95471, lon: 7.80550 },
   // Täler: nur dezente Beschriftung, ohne Stange
   { name: 'Dreisamtal', lat: 47.97414, lon: 7.94035, valley: true },
-  { name: 'Hexental', lat: 47.92392, lon: 7.78028, valley: true },
+  { name: 'Hexental', lat: 47.93650, lon: 7.79900, valley: true },
   { name: 'Glottertal', lat: 48.04853, lon: 7.95440, valley: true },
   // Höllental: Talmündung bei Himmelreich liegt knapp außerhalb des Gebiets, daher der stadtnahe Teil
   { name: 'Höllental', lat: 47.9595, lon: 7.9820, valley: true },
