@@ -62,6 +62,7 @@ const world = new THREE.Group();
 scene.add(world);
 
 // ---------------------------------------------------------------- Gelände
+const waterColor = new THREE.Color(0.10, 0.36, 0.72);
 function terrainColor(h, out) {
   const stops = [
     [150, [0.40, 0.58, 0.28]], [450, [0.30, 0.48, 0.22]], [900, [0.20, 0.36, 0.20]],
@@ -85,8 +86,10 @@ function terrainColor(h, out) {
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const k = j * nx + i, h = heights[k];
     pos.set([x0 + i * res, h, -(y0 + j * res)], k * 3);
-    if (terrain.water?.[k] === '1') c.set(0.10, 0.36, 0.72); // Wasserfläche
-    else terrainColor(h, c);
+    terrainColor(h, c);
+    // Wasseranteil der Zelle (Ziffer 0..9): teilweise Wasserzellen ergeben weiche Uferlinien und schmale Flussläufe
+    const wf = terrain.water ? +terrain.water[k] / 9 : 0;
+    if (wf > 0) c.lerp(waterColor, Math.min(1, wf * 1.25));
     col.set([c.r, c.g, c.b], k * 3);
   }
   const idx = [];

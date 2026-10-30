@@ -52,44 +52,86 @@ class Terrain
             }
             $tiles[$keys[$i][0] . ',' . $keys[$i][1]] = $h;
         }
-        $at = function (int $gx, int $gy) use ($tiles): float {
-            $t = $tiles[intdiv($gx, 256) . ',' . intdiv($gy, 256)] ?? null;
-            if ($t === null) {
-                return 0.0;
-            }
-            return $t[($gy % 256) * 256 + ($gx % 256)];
-        };
-
-        // Wasserflächen: im DEM exakt flach (Seen, große Flüsse, Meer). Prüft ±2 DEM-Pixel (~±50 m) um den Gitterpunkt.
-        $isWater = function (int $cx, int $cy) use ($at): bool {
-            $min = INF;
-            $max = -INF;
-            for ($dy = -2; $dy <= 2; $dy++) {
-                for ($dx = -2; $dx <= 2; $dx++) {
-                    $v = $at($cx + $dx, $cy + $dy);
-                    $min = min($min, $v);
-                    $max = max($max, $v);
+        // Kacheln zu einem Mosaik zusammensetzen: $M[y][x] (Pixelkoordinaten relativ zur oberen linken Kachel)
+        $M = [];
+        for ($ty = $ty0; $ty <= $ty1; $ty++) {
+            for ($r = 0; $r < 256; $r++) {
+                $row = [];
+                for ($tx = $tx0; $tx <= $tx1; $tx++) {
+                    $t = $tiles["$tx,$ty"] ?? null;
+                    $row = array_merge($row, $t === null ? array_fill(0, 256, 0.0) : array_slice($t, $r * 256, 256));
                 }
+                $M[($ty - $ty0) * 256 + $r] = $row;
             }
-            return $max - $min < 0.02;
-        };
+        }
+        $ox = $tx0 * 256;
+        $oy = $ty0 * 256;
 
-        $heights = [];
-        $water = '';
+        // Statt nur einen Punkt abzutasten, wird jede Gitterzelle (res x res) flächig ausgewertet:
+        // Mittel/Minimum/Maximum der DEM-Pixel in der Zelle und Anteil der Wasserpixel.
+        // Wasser: Pixel, die zu ihren 4 Nachbarn exakt höhengleich sind (Seen, breite Flüsse, Meer sind im DEM flach).
+        $half = max(1, (int)round($res / 2 / ($cfg['dem_px'] ?? 25.0))); // DEM-Pixel je halber Zelle (~2)
+        $mean = [];
+        $min = [];
+        $max = [];
+        $waterFrac = [];
         for ($j = 0; $j < $steps; $j++) {
             for ($i = 0; $i < $steps; $i++) {
                 [$lat, $lon] = Geo::toLatLon($cfg, -$hs + $i * $res, -$hs + $j * $res);
                 [$fx, $fy] = $pix($lat, $lon);
-                $water .= $isWater((int)floor($fx), (int)floor($fy)) ? '1' : '0';
-                $fx -= 0.5;
-                $fy -= 0.5;
-                $x0 = (int)floor($fx);
-                $y0 = (int)floor($fy);
-                $ax = $fx - $x0;
-                $ay = $fy - $y0;
-                $v = $at($x0, $y0) * (1 - $ax) * (1 - $ay) + $at($x0 + 1, $y0) * $ax * (1 - $ay)
-                    + $at($x0, $y0 + 1) * (1 - $ax) * $ay + $at($x0 + 1, $y0 + 1) * $ax * $ay;
-                $heights[] = (int)round($v);
+                $cx = (int)round($fx) - $ox;
+                $cy = (int)round($fy) - $oy;
+                $sum = 0.0;
+                $lo = INF;
+                $hi = -INF;
+                $n = 0;
+                $w = 0;
+                for ($y = $cy - $half; $y < $cy + $half; $y++) {
+                    for ($x = $cx - $half; $x < $cx + $half; $x++) {
+                        $v = $M[$y][$x] ?? null;
+                        if ($v === null) {
+                            continue;
+                        }
+                        $sum += $v;
+                        $lo = min($lo, $v);
+                        $hi = max($hi, $v);
+                        $n++;
+                        if (abs($v - ($M[$y][$x - 1] ?? INF)) < 0.02 && abs($v - ($M[$y][$x + 1] ?? INF)) < 0.02
+                            && abs($v - ($M[$y - 1][$x] ?? INF)) < 0.02 && abs($v - ($M[$y + 1][$x] ?? INF)) < 0.02) {
+                            $w++;
+                        }
+                    }
+                }
+                $k = $j * $steps + $i;
+                $mean[$k] = $n ? $sum / $n : 0.0;
+                $min[$k] = $n ? $lo : 0.0;
+                $max[$k] = $n ? $hi : 0.0;
+                $waterFrac[$k] = $n ? $w / $n : 0.0;
+            }
+        }
+
+        // Spitzen und Täler erhalten: an lokalen Maxima (Mittel über dem der 8 Nachbarn) Richtung Zellmaximum,
+        // an lokalen Minima Richtung Zellminimum. An gleichmäßigen Hängen (Differenz ~0) bleibt es beim Mittelwert.
+        $heights = [];
+        $water = '';
+        for ($j = 0; $j < $steps; $j++) {
+            for ($i = 0; $i < $steps; $i++) {
+                $k = $j * $steps + $i;
+                $nb = 0.0;
+                $c = 0;
+                for ($dj = -1; $dj <= 1; $dj++) {
+                    for ($di = -1; $di <= 1; $di++) {
+                        if (($di || $dj) && $j + $dj >= 0 && $j + $dj < $steps && $i + $di >= 0 && $i + $di < $steps) {
+                            $nb += $mean[($j + $dj) * $steps + $i + $di];
+                            $c++;
+                        }
+                    }
+                }
+                $d = $mean[$k] - $nb / $c;
+                $t = max(-1.0, min(1.0, $d / 5.0)); // 5 m Überhöhung gegenüber den Nachbarn = voller Effekt
+                $h = $mean[$k] + ($t > 0 ? $t * 0.5 * ($max[$k] - $mean[$k]) : $t * 0.5 * ($mean[$k] - $min[$k]));
+                $heights[] = (int)round($h);
+                $water .= (string)(int)round(min(1.0, $waterFrac[$k]) * 9); // 0..9 = Wasseranteil der Zelle
             }
         }
         return [
@@ -99,8 +141,9 @@ class Terrain
             'x0' => -$hs, 'y0' => -$hs,
             // Zeilenweise von Süd nach Nord, innerhalb der Zeile von West nach Ost; Meter ü. NN
             'heights' => $heights,
-            // Wasserflächen: gleiche Reihenfolge wie heights, '1' = Wasser
+            // Wasseranteil je Gitterpunkt (Zelle res x res), gleiche Reihenfolge wie heights: Ziffer 0..9 = 0..100 %
             'water' => $water,
+            'water_v' => 2,
         ];
     }
 
@@ -111,7 +154,7 @@ class Terrain
         $f = sprintf('%s/%.3f_%.3f.json', $dir, $cfg['lat'], $cfg['lon']);
         if (is_file($f)) {
             $cached = json_decode(file_get_contents($f), true);
-            if (isset($cached['water'])) { // ältere Cache-Dateien ohne Wasserflächen neu berechnen
+            if (($cached['water_v'] ?? 0) >= 2) { // ältere Cache-Dateien (andere Abtastung) neu berechnen
                 touch($f);
                 return $cached;
             }
