@@ -60,11 +60,27 @@ class Terrain
             return $t[($gy % 256) * 256 + ($gx % 256)];
         };
 
+        // Wasserflächen: im DEM exakt flach (Seen, große Flüsse, Meer). Prüft ±2 DEM-Pixel (~±50 m) um den Gitterpunkt.
+        $isWater = function (int $cx, int $cy) use ($at): bool {
+            $min = INF;
+            $max = -INF;
+            for ($dy = -2; $dy <= 2; $dy++) {
+                for ($dx = -2; $dx <= 2; $dx++) {
+                    $v = $at($cx + $dx, $cy + $dy);
+                    $min = min($min, $v);
+                    $max = max($max, $v);
+                }
+            }
+            return $max - $min < 0.02;
+        };
+
         $heights = [];
+        $water = '';
         for ($j = 0; $j < $steps; $j++) {
             for ($i = 0; $i < $steps; $i++) {
                 [$lat, $lon] = Geo::toLatLon($cfg, -$hs + $i * $res, -$hs + $j * $res);
                 [$fx, $fy] = $pix($lat, $lon);
+                $water .= $isWater((int)floor($fx), (int)floor($fy)) ? '1' : '0';
                 $fx -= 0.5;
                 $fy -= 0.5;
                 $x0 = (int)floor($fx);
@@ -83,18 +99,29 @@ class Terrain
             'x0' => -$hs, 'y0' => -$hs,
             // Zeilenweise von Süd nach Nord, innerhalb der Zeile von West nach Ost; Meter ü. NN
             'heights' => $heights,
+            // Wasserflächen: gleiche Reihenfolge wie heights, '1' = Wasser
+            'water' => $water,
         ];
     }
 
+    /** Gelände für den Ort in $cfg (lat/lon), pro Ort dauerhaft gecacht (max_locations). */
     public static function get(array $cfg): array
     {
-        $f = $cfg['cache_dir'] . '/terrain.json';
+        $dir = $cfg['cache_dir'] . '/terrain';
+        $f = sprintf('%s/%.3f_%.3f.json', $dir, $cfg['lat'], $cfg['lon']);
         if (is_file($f)) {
-            return json_decode(file_get_contents($f), true);
+            $cached = json_decode(file_get_contents($f), true);
+            if (isset($cached['water'])) { // ältere Cache-Dateien ohne Wasserflächen neu berechnen
+                touch($f);
+                return $cached;
+            }
         }
+        @mkdir($dir, 0777, true);
         $t = self::build($cfg);
-        file_put_contents($f . '.tmp', json_encode($t));
-        rename($f . '.tmp', $f);
+        file_put_contents("$f.tmp", json_encode($t));
+        rename("$f.tmp", $f);
+        require_once __DIR__ . '/CloudService.php';
+        CloudService::prune($dir, $cfg['max_locations']);
         return $t;
     }
 }

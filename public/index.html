@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Wolken über Freiburg</title>
+<title>Wolken 3D</title>
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 { "imports": {
@@ -14,6 +14,21 @@
 </head>
 <body>
 <canvas id="view"></canvas>
+<div id="place">
+  <div id="placebox">
+    <input id="placeinput" type="text" role="combobox" aria-expanded="false" aria-controls="placelist" aria-label="Ort suchen"
+           autocomplete="off" spellcheck="false" placeholder="Ort suchen …">
+    <button id="locate" type="button" title="Aktueller Standort" aria-label="Aktueller Standort"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg></button>
+  </div>
+  <ul id="placelist" role="listbox" hidden></ul>
+  <div id="placemsg" hidden></div>
+</div>
+<div id="compass" title="Norden">
+  <svg viewBox="-24 -24 48 48" width="48" height="48" aria-label="Kompass, Norden">
+    <circle r="22" class="ring"/>
+    <g id="needle"><path d="M0 -11 L4.5 3 L0 0 L-4.5 3 Z" class="north"/><path d="M0 11 L4.5 -3 L0 0 L-4.5 -3 Z" class="south"/><text id="nlabel" x="0" y="-16.5" text-anchor="middle" dominant-baseline="central">N</text></g>
+  </svg>
+</div>
 <div id="update" hidden></div>
 <div id="loading"><div id="loadmsg">Lade Daten …</div></div>
 

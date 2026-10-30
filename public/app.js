@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { currentPlace, initPlaceSearch } from './place.js';
 
 const $ = id => document.getElementById(id);
 
@@ -13,19 +14,24 @@ async function loadJSON(url, onWait) {
       await new Promise(res => setTimeout(res, 2500));
       continue;
     }
-    if (!r.ok) throw new Error(url + ': HTTP ' + r.status);
+    if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `${url}: HTTP ${r.status}`);
     return r.json();
   }
 }
 
 function setLoading(msg) { $('loadmsg').textContent = msg; }
 
+const place = currentPlace();
+initPlaceSearch(place);
+document.title = `Wolken 3D – ${place.name}`;
+const qs = `?lat=${place.lat}&lon=${place.lon}`;
+
 const [terrain, clouds] = await Promise.all([
-  loadJSON('api/terrain.php'),
-  loadJSON('api/clouds.php', s => setLoading(s.total
+  loadJSON('api/terrain.php' + qs),
+  loadJSON('api/clouds.php' + qs, s => setLoading(s.total
     ? `Server lädt ICON-D2 … ${s.done} / ${s.total} Dateien`
     : 'Server lädt ICON-D2 …')),
-]).catch(e => { setLoading('Fehler: ' + e.message); throw e; });
+]).catch(e => { setLoading(e.message + ' Bitte oben einen anderen Ort wählen.'); throw e; });
 $('loading').classList.add('hidden');
 
 // ---------------------------------------------------------------- Szene
@@ -79,7 +85,8 @@ function terrainColor(h, out) {
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const k = j * nx + i, h = heights[k];
     pos.set([x0 + i * res, h, -(y0 + j * res)], k * 3);
-    terrainColor(h, c);
+    if (terrain.water?.[k] === '1') c.set(0.10, 0.36, 0.72); // Wasserfläche
+    else terrainColor(h, c);
     col.set([c.r, c.g, c.b], k * 3);
   }
   const idx = [];
@@ -278,8 +285,6 @@ function valleyAngle(x, y, d = 600) {
   return (0.5 * Math.atan2(2 * hxy, hxx - hyy) * 180 / Math.PI + 90 + 180) % 180; // senkrecht zur stärksten Krümmung
 }
 const markerDefs = [
-  { name: 'Freiburg (Münster)', lat: clouds.center.lat, lon: clouds.center.lon },
-  { name: 'Weberstr. 36, Merzhausen', lat: 47.96114, lon: 7.82483 },
   { name: 'Schauinsland', lat: 47.91188, lon: 7.89866 },
   { name: 'Schönberg', lat: 47.95471, lon: 7.80550 },
   // Täler: nur dezente Beschriftung, ohne Stange
@@ -296,7 +301,11 @@ const markerDefs = [
   { name: 'Freiburger Bucht', lat: 48.01364, lon: 7.75433, valley: true, angle: 70 },
 ];
 const poleMat = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
-const markers = markerDefs.map(m => {
+// Marker außerhalb des Kartenbereichs werden nicht angezeigt; der gewählte Ort steht immer in der Mitte
+const inArea = m => Math.abs((m.lon - clouds.center.lon) * M_LON) <= clouds.half_size
+  && Math.abs((m.lat - clouds.center.lat) * M_LAT) <= clouds.half_size;
+const allMarkers = [{ name: place.name, lat: clouds.center.lat, lon: clouds.center.lon }, ...markerDefs.filter(inArea)];
+const markers = allMarkers.map(m => {
   const x = (m.lon - clouds.center.lon) * M_LON, y = (m.lat - clouds.center.lat) * M_LAT;
   const h = terrainAt(x, y);
   const el = document.createElement('div');
@@ -326,8 +335,12 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
+const needle = $('needle'), nlabel = $('nlabel');
 renderer.setAnimationLoop(() => {
   controls.update();
+  const az = (controls.getAzimuthalAngle() * 180 / Math.PI).toFixed(1); // Norden relativ zur Blickrichtung
+  needle.style.transform = `rotate(${az}deg)`;
+  nlabel.setAttribute('transform', `rotate(${-az} 0 -16.5)`); // Buchstabe bleibt aufrecht
   for (const m of markers) {
     tmp.copy(m.pos).applyMatrix4(world.matrixWorld).project(camera);
     m.el.style.display = tmp.z < 1 ? '' : 'none';

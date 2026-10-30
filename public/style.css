@@ -27,3 +27,29 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb4d6; fon
 #update progress { width: 90px; height: 8px; }
 .label.valley { background: none; padding: 0; font-size: 12px; font-style: italic; letter-spacing: .06em; color: rgba(255, 255, 255, .8);
   text-shadow: 0 0 3px rgba(20, 35, 25, .9), 0 0 8px rgba(20, 35, 25, .6); transform: translate(-50%, -50%); }
+
+/* Ortssuche */
+/* rechts bleibt Platz für den Kompass (48 px + Ränder) */
+#place { position: fixed; top: 12px; left: 12px; z-index: 7; width: min(320px, calc(100% - 92px)); }
+#placebox { display: flex; background: var(--panel); backdrop-filter: blur(6px); border-radius: 16px; overflow: hidden; }
+#placeinput { flex: 1; min-width: 0; border: 0; background: none; color: var(--fg); padding: 8px 6px 8px 14px; font: inherit; outline: none; }
+#placeinput::placeholder { color: rgba(238, 243, 248, .55); }
+#placebox:focus-within { box-shadow: 0 0 0 2px var(--accent); }
+#locate { border: 0; background: none; color: var(--fg); padding: 0 12px; cursor: pointer; display: flex; align-items: center; }
+#locate:hover { color: var(--accent); }
+#placelist { list-style: none; margin: 4px 0 0; padding: 4px; background: var(--panel); backdrop-filter: blur(6px); border-radius: 12px;
+  max-height: 50vh; overflow: auto; }
+#placelist[hidden], #placemsg[hidden] { display: none; }
+#placelist li { padding: 6px 10px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; }
+#placelist li small { opacity: .65; font-size: 11px; }
+#placelist li:hover, #placelist li.active { background: rgba(90, 169, 255, .3); }
+#placemsg { margin-top: 4px; padding: 4px 12px; border-radius: 12px; background: var(--panel); font-size: 12px; }
+@media (max-width: 700px) { #update { top: 58px; } }
+
+/* Kompass */
+#compass { position: fixed; top: 12px; right: 12px; width: 48px; height: 48px; z-index: 4; pointer-events: none; }
+#compass svg { display: block; }
+#compass .ring { fill: var(--panel); stroke: rgba(255, 255, 255, .25); stroke-width: 1; }
+#compass .north { fill: #ff5a4d; }
+#compass text { fill: #fff; font: 700 9px system-ui, sans-serif; paint-order: stroke; stroke: rgba(20, 30, 45, .8); stroke-width: 2px; }
+#compass .south { fill: rgba(255, 255, 255, .55); }
