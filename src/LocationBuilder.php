@@ -99,7 +99,7 @@ class LocationBuilder
             $clc[] = $flat;
         }
 
-        return [
+        $out = [
             'format' => 'cloud3d/1',
             'model' => 'ICON-D2',
             'source' => 'DWD Open Data, Variable clc (Wolkenbedeckungsgrad je Modellschicht, %)',
@@ -115,6 +115,54 @@ class LocationBuilder
             // clc[t]: nz*ny*nx Werte (0..100 %), Index = (l*ny + j)*nx + i
             'clc' => $clc,
         ];
+        if (!empty($meta['surface'])) {
+            // surface: 2D-Felder je Zeitschritt, je ny*nx Werte (Index j*nx+i)
+            //   t2m (°C, 2 m über Modellgelände), precip (mm in der vorangegangenen Stunde, Schritt 0 = 0),
+            //   snow (% des Niederschlags als Schnee)
+            $out['surface'] = self::surface($dir, $run, $meta['steps'], $map, $win, $cols);
+        }
+        return $out;
+    }
+
+    /** Fensterwerte eines 2D-Felds aus der Cachedatei (Kopfzeile [R,E,D,bits] + 16-Bit-Rohdaten). */
+    private static function surfaceField(string $f, array $map): array
+    {
+        [$hdr, $b] = explode("\n", gzinflate(file_get_contents($f)), 2);
+        [$R, $E, $D, $bits] = json_decode($hdr);
+        if ($bits === 0) {
+            $c = $R / 10 ** $D;
+            return self::pick($map, fn() => $c);
+        }
+        return self::pick($map, fn($p) => ($R + ((ord($b[$p * 2]) << 8) | ord($b[$p * 2 + 1])) * 2 ** $E) / 10 ** $D);
+    }
+
+    private static function surface(string $dir, string $run, int $steps, array $map, array $win, array $cols): array
+    {
+        $f = fn(string $v, int $t) => self::surfaceField(sprintf('%s/run_%s/s_%s_t%03d.gz', $dir, $run, $v, $t), $map);
+        $diff = fn(array $a, array $b) => array_map(fn($ra, $rb) => array_map(fn($x, $y) => max(0.0, $x - $y), $ra, $rb), $a, $b);
+        $res = ['t2m' => [], 'precip' => [], 'snow' => []];
+        $prevTot = $prevSnow = null;
+        for ($t = 0; $t <= $steps; $t++) {
+            $T = $f('t_2m', $t);
+            $tot = $f('tot_prec', $t);
+            $snow = $f('snow_gsp', $t);
+            $rate = $prevTot === null ? self::pick($map, fn() => 0.0) : $diff($tot, $prevTot);
+            $srate = $prevSnow === null ? $rate : $diff($snow, $prevSnow);
+            $prevTot = $tot;
+            $prevSnow = $snow;
+            $a = $b = $c = [];
+            foreach ($cols as [$lat, $lon]) {
+                $r = self::sample($rate, $win, $lat, $lon);
+                $sr = min($r, self::sample($srate, $win, $lat, $lon));
+                $a[] = round(self::sample($T, $win, $lat, $lon) - 273.15, 1);
+                $b[] = round($r, 2);
+                $c[] = $r > 0.005 ? (int)round(100 * $sr / $r) : 0;
+            }
+            $res['t2m'][] = $a;
+            $res['precip'][] = $b;
+            $res['snow'][] = $c;
+        }
+        return $res;
     }
 
     private static function pick(array $map, callable $f): array

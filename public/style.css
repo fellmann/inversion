@@ -13,6 +13,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #8fb4d6; fon
 #play { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; flex: none; }
 #time { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
 #runinfo { margin-left: auto; font-size: 12px; opacity: .7; text-align: right; }
+#wx { font-size: 12px; opacity: .85; margin-bottom: 4px; }
+#wx[hidden], #wxopts[hidden] { display: none; }
+#wxopts { display: contents; }
 #strip { position: relative; height: 40px; }
 #cover { position: absolute; inset: 0 0 auto 0; width: 100%; height: 24px; border-radius: 4px; cursor: pointer; touch-action: none; }
 #slider { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; margin: 0; height: 24px; accent-color: var(--accent); touch-action: pan-y; }

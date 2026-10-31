@@ -193,6 +193,182 @@ function showStep(t) {
   alphaAttr.needsUpdate = true;
 }
 
+// ---------------------------------------------------------------- Wetter-Oberfläche (2D): Temperatur, Regen, Schnee
+// surface.t2m (°C), .precip (mm in der Stunde vor dem Zeitschritt), .snow (% Schneeanteil), je Zeitschritt ny*nx Werte
+const surf = clouds.surface;
+let updateWeather = () => {};   // aktualisiert Zahlen/Partikel für Zeitschritt t
+let layoutTemps = () => {};     // Temperaturzahlen an Überhöhung anpassen
+let precipDensity = () => 0;    // mm/h -> Anteil sichtbarer Partikel
+let precipUniforms = null;
+const wxClass = { rain: null, snow: null, temps: [] };
+
+// Bilinear aus einem 1-km-Feld (ny*nx) an lokalen Koordinaten x (Ost), y (Nord) in m
+function cellSample(f, x, y) {
+  const u = Math.min(cx - 1.001, Math.max(0, (x + hs) / cell - 0.5)), v = Math.min(cy - 1.001, Math.max(0, (y + hs) / cell - 0.5));
+  const i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j, o = j * cx + i;
+  return f[o] * (1 - a) * (1 - b) + f[o + 1] * a * (1 - b) + f[o + cx] * (1 - a) * b + f[o + cx + 1] * a * b;
+}
+
+if (surf) {
+  // ---- Temperaturzahlen: Sprites auf einem 6x6-Raster (ICON-D2 löst ~2 km auf), von Gelände verdeckt
+  const TN = 6, tstep = 2 * hs / TN;
+  const tempGroup = new THREE.Group();
+  tempGroup.visible = false;
+  scene.add(tempGroup); // nicht in `world`: Sprites sollen durch die Überhöhung nicht verzerrt werden
+  for (let j = 0; j < TN; j++) for (let i = 0; i < TN; i++) {
+    const x = -hs + (i + 0.5) * tstep, y = -hs + (j + 0.5) * tstep;
+    const cv = document.createElement('canvas');
+    cv.width = 128; cv.height = 64;
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sp.scale.set(1500, 750, 1);
+    sp.renderOrder = 4;
+    tempGroup.add(sp);
+    wxClass.temps.push({ x, y, h: terrainAt(x, y), sp, cv, tex });
+  }
+  layoutTemps = () => {
+    const ex = +$('exag').value;
+    for (const t of wxClass.temps) t.sp.position.set(t.x, t.h * ex + 450, -t.y);
+  };
+  const drawTemps = step => {
+    for (const t of wxClass.temps) {
+      const v = cellSample(surf.t2m[step], t.x, t.y), g = t.cv.getContext('2d');
+      g.clearRect(0, 0, 128, 64);
+      g.font = '700 42px system-ui, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 7; g.lineJoin = 'round';
+      g.strokeStyle = 'rgba(15,25,40,.85)';
+      const txt = `${Math.round(v)}°`;
+      g.strokeText(txt, 64, 34);
+      g.fillStyle = `hsl(${Math.round(220 - Math.max(0, Math.min(1, (v + 10) / 40)) * 220)} 90% 72%)`; // -10 °C blau … 30 °C rot
+      g.fillText(txt, 64, 34);
+      t.tex.needsUpdate = true;
+    }
+  };
+
+  // ---- Regen (Linien) und Schnee (Punkte): fallen von der Wolkenobergrenze (max. 4 km) bis zum Gelände
+  precipDensity = mm => mm < 0.03 ? 0 : Math.min(1, Math.sqrt(mm / 4)); // 0,1 mm/h -> 16 %, 1 mm/h -> 50 %, 4 mm/h -> 100 %
+  precipUniforms = { uTime: { value: 0 }, uPx: { value: 800 } };
+  function makeParticles(n, perVertex, material, Obj) {
+    const m = n * perVertex, A = () => new Float32Array(m);
+    const a = { pos: new Float32Array(m * 3), ground: A(), top: A().fill(2500), den: A(), rnd: A(), phase: A(), end: A() };
+    const px = new Float32Array(n), py = new Float32Array(n);
+    for (let p = 0; p < n; p++) {
+      const x = (Math.random() * 2 - 1) * hs, y = (Math.random() * 2 - 1) * hs, g = terrainAt(x, y);
+      const r = Math.random(), ph = Math.random();
+      px[p] = x; py[p] = y;
+      for (let v = 0; v < perVertex; v++) {
+        const o = p * perVertex + v;
+        a.pos.set([x, g, -y], o * 3);
+        a.ground[o] = g; a.rnd[o] = r; a.phase[o] = ph; a.end[o] = v;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(a.pos, 3));
+    for (const [k, name] of [['ground', 'aGround'], ['top', 'aTop'], ['den', 'aDen'], ['rnd', 'aRand'], ['phase', 'aPhase'], ['end', 'aEnd']]) {
+      const at = new THREE.BufferAttribute(a[k], 1);
+      if (k === 'top' || k === 'den') at.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute(name, at);
+    }
+    const obj = new Obj(geo, material);
+    obj.frustumCulled = false;
+    obj.renderOrder = 3;
+    obj.visible = false;
+    world.add(obj);
+    return { obj, geo, n, pv: perVertex, x: px, y: py, a };
+  }
+  const common = `
+    uniform float uTime;
+    attribute float aGround, aTop, aDen, aRand, aPhase, aEnd;
+    varying float vA;
+    float fall(float speed) { return fract(aPhase + uTime * speed / aTop); } // 0 oben ... 1 am Boden
+  `;
+  const rain = makeParticles(50000, 2, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, uniforms: precipUniforms,
+    vertexShader: common + `
+      void main() {
+        float f = fall(700.0);
+        float y = max(aGround + aTop * (1.0 - f) + aEnd * 260.0, aGround);
+        vA = step(aRand, aDen) * smoothstep(0.0, 0.12, f);
+        gl_Position = vA > 0.0 ? projectionMatrix * modelViewMatrix * vec4(position.x, y, position.z, 1.0) : vec4(2.0, 2.0, 2.0, 1.0);
+      }`,
+    fragmentShader: `varying float vA; void main() { gl_FragColor = vec4(0.72, 0.84, 1.0, vA * 0.55); }`,
+  }), THREE.LineSegments);
+  const snow = makeParticles(40000, 1, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, uniforms: precipUniforms,
+    vertexShader: common + `
+      uniform float uPx;
+      void main() {
+        float f = fall(160.0);
+        vec3 p = vec3(position.x + sin(uTime * 0.9 + aPhase * 40.0) * 70.0, aGround + aTop * (1.0 - f), position.z + cos(uTime * 0.7 + aPhase * 31.0) * 70.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vA = step(aRand, aDen) * smoothstep(0.0, 0.12, f);
+        gl_Position = vA > 0.0 ? projectionMatrix * mv : vec4(2.0, 2.0, 2.0, 1.0);
+        gl_PointSize = clamp(110.0 * uPx / -mv.z, 1.5, 7.0);
+      }`,
+    fragmentShader: `varying float vA; void main() {
+      float d = length(gl_PointCoord - 0.5);
+      gl_FragColor = vec4(1.0, 1.0, 1.0, vA * smoothstep(0.5, 0.15, d) * 0.9);
+    }`,
+  }), THREE.Points);
+  wxClass.rain = rain; wxClass.snow = snow;
+
+  // Höhe der Oberkante der obersten Schicht mit >= 30 % Bedeckung je Säule (NaN = keine Wolke)
+  function cloudTops(step) {
+    const f = clouds.clc[step], out = new Float32Array(per).fill(NaN);
+    for (let c = 0; c < per; c++) for (let l = nz - 1; l >= 0; l--) {
+      if (f[l * per + c] >= 30) { out[c] = clouds.heights[(l + 1) * per + c]; break; }
+    }
+    return out;
+  }
+  function updatePrecip(step) {
+    const R = surf.precip[step], S = surf.snow[step], tops = cloudTops(step);
+    for (const sys of [rain, snow]) {
+      const isSnow = sys === snow, { a, pv } = sys;
+      for (let p = 0; p < sys.n; p++) {
+        const x = sys.x[p], y = sys.y[p];
+        const d = precipDensity(cellSample(R, x, y)) * (isSnow ? cellSample(S, x, y) / 100 : 1 - cellSample(S, x, y) / 100);
+        const col = Math.min(cy - 1, Math.max(0, Math.floor((y + hs) / cell))) * cx + Math.min(cx - 1, Math.max(0, Math.floor((x + hs) / cell)));
+        const top = Number.isNaN(tops[col]) ? 2500 : Math.max(600, Math.min(4000, tops[col] - a.ground[p * pv]));
+        for (let v = 0; v < pv; v++) { a.den[p * pv + v] = d; a.top[p * pv + v] = top; }
+      }
+      sys.geo.attributes.aDen.needsUpdate = true;
+      sys.geo.attributes.aTop.needsUpdate = true;
+    }
+  }
+  const tempOn = () => $('showtemp').checked, precipOn = () => $('showprecip').checked;
+  updateWeather = step => {
+    const m = cellSample(surf.t2m[step], 0, 0), r = cellSample(surf.precip[step], 0, 0), s = cellSample(surf.snow[step], 0, 0);
+    $('wx').textContent = `${place.name}: ${m.toFixed(1).replace('.', ',')} °C · ` + (r < 0.03 ? 'kein Niederschlag'
+      : `${r.toFixed(1).replace('.', ',')} mm/h ${s >= 50 ? 'Schnee' : s > 10 ? 'Schneeregen' : 'Regen'}`);
+    if (tempOn()) drawTemps(step);
+    if (precipOn()) updatePrecip(step);
+  };
+  const syncVisible = () => {
+    tempGroup.visible = tempOn();
+    rain.obj.visible = snow.obj.visible = precipOn();
+    updateWeather(step);
+  };
+  $('showtemp').addEventListener('change', syncVisible);
+  $('showprecip').addEventListener('change', syncVisible);
+  layoutTemps();
+  rain.obj.visible = snow.obj.visible = precipOn();
+} else {
+  $('wxopts').hidden = true;
+  $('wx').hidden = true;
+}
+// Anteil der Fläche mit Niederschlag und mittlerer Schneeanteil je Zeitschritt (für den Zeitstrahl)
+function precipSummary(t) {
+  if (!surf) return null;
+  let d = 0, sn = 0, w = 0;
+  for (let c = 0; c < per; c++) {
+    const v = precipDensity(surf.precip[t][c]);
+    d += v; sn += v * surf.snow[t][c]; w += v;
+  }
+  return { mean: d / per, snow: w ? sn / w / 100 : 0 };
+}
+
 // ---------------------------------------------------------------- Zeitstrahl
 const times = clouds.times.map(s => new Date(s));
 const slider = $('slider');
@@ -218,6 +394,11 @@ function drawCover() {
     g.fillStyle = `rgba(255,255,255,${0.15 + 0.75 * cover})`;
     const h = c.height * (0.15 + 0.85 * cover);
     g.fillRect(t * w + 1, c.height - h, w - 2, h);
+    const pr = precipSummary(t); // Niederschlag: Balken oben, blau = Regen, hellblau/weiß = Schnee
+    if (pr && pr.mean > 0.01) {
+      g.fillStyle = pr.snow > 0.5 ? `rgba(200,230,255,${0.3 + 0.7 * pr.mean})` : `rgba(40,120,255,${0.3 + 0.7 * pr.mean})`;
+      g.fillRect(t * w + 1, 0, w - 2, 4 * r);
+    }
   });
 }
 addEventListener('resize', drawCover);
@@ -228,6 +409,7 @@ function setStep(t) {
   slider.value = step;
   $('time').textContent = fmt.format(times[step]) + ' Uhr';
   showStep(step);
+  updateWeather(step);
 }
 // Auch der Bedeckungsstreifen steuert die Zeit (Klick/Ziehen, Maus und Touch)
 const cover = $('cover');
@@ -263,7 +445,7 @@ const tParam = new URLSearchParams(location.search).get('t'); // ?t=<Zeitschritt
 setStep(tParam !== null ? +tParam : start);
 
 // ---------------------------------------------------------------- Optionen
-function applyExag() { world.scale.y = +$('exag').value; }
+function applyExag() { world.scale.y = +$('exag').value; layoutTemps(); }
 $('exag').addEventListener('input', applyExag);
 $('opacity').addEventListener('input', () => { cloudUniforms.uOpacity.value = +$('opacity').value; });
 $('showclouds').addEventListener('change', e => { cloudMesh.visible = e.target.checked; });
@@ -334,6 +516,7 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (precipUniforms) precipUniforms.uPx.value = renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
 }
 addEventListener('resize', resize);
 resize();
@@ -341,6 +524,7 @@ resize();
 const needle = $('needle'), nlabel = $('nlabel');
 renderer.setAnimationLoop(() => {
   controls.update();
+  if (precipUniforms) precipUniforms.uTime.value = performance.now() / 1000;
   const az = (controls.getAzimuthalAngle() * 180 / Math.PI).toFixed(1); // Norden relativ zur Blickrichtung
   needle.style.transform = `rotate(${az}deg)`;
   nlabel.setAttribute('transform', `rotate(${-az} 0 -16.5)`); // Buchstabe bleibt aufrecht

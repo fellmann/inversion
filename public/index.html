@@ -38,11 +38,16 @@
     <div id="time">–</div>
     <div id="runinfo"></div>
   </div>
+  <div id="wx"></div>
   <div id="strip"><canvas id="cover"></canvas><input id="slider" type="range" min="0" max="0" value="0" step="1"></div>
   <div id="opts">
     <label>Überhöhung <input id="exag" type="range" min="1" max="5" step="0.25" value="2"></label>
     <label>Wolken-Deckkraft <input id="opacity" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
     <label><input id="showclouds" type="checkbox" checked> Wolken</label>
+    <span id="wxopts">
+      <label><input id="showprecip" type="checkbox"> Regen/Schnee</label>
+      <label><input id="showtemp" type="checkbox"> Temperatur</label>
+    </span>
   </div>
 </div>
 <script type="module" src="app.js"></script>

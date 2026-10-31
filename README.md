@@ -25,10 +25,11 @@ Der letzte Lauf wird für das **gesamte** Modellgebiet kompakt zwischengespeiche
 Gitterpunkt, deflate, ~50 MB; dazu einmalig die Schichthöhen `hhl`). Das Zwischenformat für einen Ort wird erst bei der
 Anfrage daraus berechnet (~1,5 s) und pro Ort/Lauf gecacht (`cache/loc/`, max. 40 Orte). Ein Vorberechnen des
 Zwischenformats für alle Orte wäre mit ~1,3 Mrd. Werten deutlich größer.
+Zusätzlich je Stunde drei 2D-Felder (`t_2m`, `tot_prec`, `snow_gsp`, 16-Bit-Rohdaten, ~50 MB).
 
 ## Aufbau
 - `src/config.php` – Standardort, Gebiet (±10 km), Zellgröße, Vorhersagestunden, Höhenlimit
-- `src/CloudBuilder.php` – lädt `clc` (je Modellschicht) + `hhl` vom DWD (regular-lat-lon, GRIB2, bzip2) und speichert den Lauf
+- `src/CloudBuilder.php` – lädt `clc` (je Modellschicht), `hhl` und die 2D-Felder vom DWD (regular-lat-lon, GRIB2, bzip2) und speichert den Lauf
 - `src/Grib2.php` – eigener GRIB2-Decoder (Simple Packing, Bitmap)
 - `src/LocationBuilder.php` – schneidet das Gebiet um den Ort aus und interpoliert auf ein 1-km-Raster
 - `src/CloudService.php` – Lauf-/Ortscache, Prüfung auf neuen Lauf, Hintergrund-Build mit Lock
@@ -39,6 +40,9 @@ Zwischenformats für alle Orte wäre mit ~1,3 Mrd. Werten deutlich größer.
 ## Zwischenformat (`cloud3d/1`)
 `nx, ny, nz`, `times[]`, `heights` ((nz+1)·ny·nx Halbflächenhöhen in m ü. NN, unten→oben),
 `clc[t]` (nz·ny·nx Wolkenbedeckung 0–100 %, Index `(l·ny + j)·nx + i`, i = West→Ost, j = Süd→Nord), `center`.
+Optional `surface` (je Zeitschritt ny·nx Werte): `t2m` (°C, 2 m über Modellgelände), `precip` (mm in der Stunde vor dem
+Zeitschritt, Schritt 0 = 0), `snow` (Schneeanteil am Niederschlag in %). Im Frontend optional als Temperaturzahlen auf
+dem Gelände und als animierter Regen/Schnee.
 
 ## Test-Parameter (URL)
 - `?simulate=update` – spielt die Anzeige „neuer Modelllauf wird geladen → verfügbar" nach (ca. 15 s), ohne Server-Update

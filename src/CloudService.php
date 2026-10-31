@@ -94,7 +94,8 @@ class CloudService
     public function locationFile(array $meta): string
     {
         $dir = "{$this->cfg['cache_dir']}/loc";
-        $f = sprintf('%s/%s_%.3f_%.3f.json', $dir, $meta['run'], $this->cfg['lat'], $this->cfg['lon']);
+        // "_s": Ortsdatei enthält die 2D-Felder (Läufe aus älteren Versionen bekommen so neue Dateien)
+        $f = sprintf('%s/%s%s_%.3f_%.3f.json', $dir, $meta['run'], empty($meta['surface']) ? '' : '_s', $this->cfg['lat'], $this->cfg['lon']);
         if (is_file($f)) {
             touch($f);
             return $f;

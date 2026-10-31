@@ -6,10 +6,14 @@ require_once __DIR__ . '/Grib2.php';
 //   cache/grid.json, bitmap.bin           Gitter + Gültigkeitsmaske (einmalig)
 //   cache/hhl/L<k>.gz, hhl/meta.json      Höhen der Halbflächen (einmalig, 16-Bit-Rohwerte)
 //   cache/run_<run>/t<TTT>_k<KK>.gz       Bedeckung 0..100 % als Bytes je Schicht und Stunde
+//   cache/run_<run>/s_<var>_t<TTT>.gz     2D-Felder (t_2m, tot_prec, snow_gsp): Kopfzeile [R,E,D,bits] + 16-Bit-Rohdaten
 //   cache/meta_<run>.json                 Lauf komplett (wird zuletzt geschrieben)
 // Das Zwischenformat für einen Ort wird daraus erst bei Anfrage berechnet (LocationBuilder).
 class CloudBuilder
 {
+    /** 2D-Felder (Einzelebene): 2-m-Temperatur, akkumulierter Gesamtniederschlag, akkumulierter Schneefall (grid-scale) */
+    public const SURFACE = ['t_2m', 'tot_prec', 'snow_gsp'];
+
     private array $cfg;
     private string $dir;
 
@@ -32,6 +36,13 @@ class CloudBuilder
         return "{$this->cfg['dwd_base']}/$hh/$var/icon-d2_germany_regular-lat-lon_{$kind}_{$run}_{$t}_{$level}_{$var}.grib2.bz2";
     }
 
+    private function url2d(string $run, string $var, int $step): string
+    {
+        $hh = substr($run, 8, 2);
+        return sprintf('%s/%s/%s/icon-d2_germany_regular-lat-lon_single-level_%s_%03d_2d_%s.grib2.bz2',
+            $this->cfg['dwd_base'], $hh, $var, $run, $step, $var);
+    }
+
     /** Neuester vollständig veröffentlichter Lauf (YYYYMMDDHH) oder null. */
     public function latestRun(): ?string
     {
@@ -39,7 +50,8 @@ class CloudBuilder
         $t = (int)(floor(time() / 10800) * 10800);
         for ($i = 0; $i < 8; $i++, $t -= 10800) {
             $run = gmdate('YmdH', $t);
-            if (Http::head($this->url($run, 'clc', $n, 1)) && Http::head($this->url($run, 'clc', $n, 65))) {
+            if (Http::head($this->url($run, 'clc', $n, 1)) && Http::head($this->url($run, 'clc', $n, 65))
+                && Http::head($this->url2d($run, 'tot_prec', $n))) {
                 return $run;
             }
         }
@@ -116,13 +128,15 @@ class CloudBuilder
 
     // ---------------------------------------------------------------- Build
 
-    /** Baut (oder setzt fort) den Lauf; danach liegt meta_<run>.json vor. */
+    /** Baut (oder setzt fort) den Lauf; danach liegt meta_<run>.json mit surface=true vor. */
     public function build(string $run): void
     {
         $metaRun = "{$this->dir}/meta_$run.json";
-        if (is_file($metaRun)) {
+        $old = is_file($metaRun) ? json_decode(file_get_contents($metaRun), true) : null;
+        if ($old && !empty($old['surface'])) {
             return;
         }
+        // Lauf aus einer Version ohne 2D-Felder: nur diese nachladen
         $st = $this->ensureStatic($run);
         $ks = $st['ks'];
         $md5 = json_decode(file_get_contents("{$this->dir}/grid.json"), true)['bitmap_md5'];
@@ -130,24 +144,35 @@ class CloudBuilder
         $runDir = "{$this->dir}/run_$run";
         @mkdir($runDir, 0777, true);
         $steps = $this->cfg['forecast_hours'];
-        $total = ($steps + 1) * count($ks);
+        $total = 0;
         $done = 0;
-        $tasks = [];
+        $tasks = []; // [Art, t, k|Variable, URL]
         for ($t = 0; $t <= $steps; $t++) {
-            foreach ($ks as $k) {
-                if (is_file($this->layerFile($run, $t, $k))) {
+            if (!$old) {
+                foreach ($ks as $k) {
+                    $total++;
+                    if (is_file($this->layerFile($run, $t, $k))) {
+                        $done++;
+                    } else {
+                        $tasks[] = ['clc', $t, $k, $this->url($run, 'clc', $t, $k)];
+                    }
+                }
+            }
+            foreach (self::SURFACE as $v) {
+                $total++;
+                if (is_file($this->surfaceFile($run, $v, $t))) {
                     $done++;
                 } else {
-                    $tasks[] = [$t, $k, $this->url($run, 'clc', $t, $k)];
+                    $tasks[] = ['2d', $t, $v, $this->url2d($run, $v, $t)];
                 }
             }
         }
-        $this->status('running', $run, $done, $total, 'Lade ICON-D2 clc');
+        $this->status('running', $run, $done, $total, 'Lade ICON-D2');
 
         $errors = 0;
         $last = 0;
-        Http::multi(array_column($tasks, 2), $this->cfg['parallel'], function ($i, $body) use (&$tasks, &$done, &$errors, &$last, $run, $total, $md5) {
-            [$t, $k] = $tasks[$i];
+        Http::multi(array_column($tasks, 3), $this->cfg['parallel'], function ($i, $body) use (&$tasks, &$done, &$errors, &$last, $run, $total, $md5) {
+            [$kind, $t, $k] = $tasks[$i];
             $d = $body === null ? null : Http::bunzip2($body);
             if ($d === null) {
                 $errors++;
@@ -155,25 +180,40 @@ class CloudBuilder
             }
             $p = Grib2::parse($d);
             if ($p['bitmap'] === null || md5($p['bitmap']) !== $md5) {
-                throw new RuntimeException('clc: Gültigkeitsmaske weicht ab');
+                throw new RuntimeException("$k: Gültigkeitsmaske weicht ab");
             }
-            $f = $this->layerFile($run, $t, $k);
-            file_put_contents("$f.part", gzdeflate(Grib2::percentBytes($p), 3));
+            if ($kind === 'clc') {
+                $f = $this->layerFile($run, $t, $k);
+                $out = gzdeflate(Grib2::percentBytes($p), 3);
+            } else {
+                if ($p['template'] !== 0 || !in_array($p['bits'], [0, 16], true)) {
+                    throw new RuntimeException("$k: unerwartetes Format");
+                }
+                $f = $this->surfaceFile($run, $k, $t);
+                $out = gzdeflate(json_encode([$p['R'], $p['E'], $p['D'], $p['bits']]) . "\n" . $p['data'], 3);
+            }
+            file_put_contents("$f.part", $out);
             rename("$f.part", $f);
             $done++;
             if (time() !== $last) {
                 $last = time();
-                $this->status('running', $run, $done, $total, 'Lade ICON-D2 clc');
+                $this->status('running', $run, $done, $total, 'Lade ICON-D2');
             }
         });
         if ($errors) {
             throw new RuntimeException("$errors Dateien konnten nicht geladen werden (Lauf evtl. unvollständig); erneut versuchen");
         }
 
-        file_put_contents("$metaRun.tmp", json_encode(['run' => $run, 'steps' => $steps, 'ks' => $ks, 'created' => time()]));
+        file_put_contents("$metaRun.tmp", json_encode(['run' => $run, 'steps' => $steps, 'ks' => $ks,
+            'created' => $old['created'] ?? time(), 'surface' => true]));
         rename("$metaRun.tmp", $metaRun);
         $this->cleanup($run);
         $this->status('idle', $run, $total, $total, 'fertig');
+    }
+
+    private function surfaceFile(string $run, string $var, int $t): string
+    {
+        return sprintf('%s/run_%s/s_%s_t%03d.gz', $this->dir, $run, $var, $t);
     }
 
     private function layerFile(string $run, int $t, int $k): string
